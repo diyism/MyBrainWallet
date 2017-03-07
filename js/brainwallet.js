@@ -9,17 +9,10 @@
     var timeout = null;
 
     function parseBase58Check(address) {
-        var bytes = Bitcoin.Base58.decode(address);
-        var end = bytes.length - 4;
-        var hash = bytes.slice(0, end);
-        var checksum = Crypto.SHA256(Crypto.SHA256(hash, {asBytes: true}), {asBytes: true});
-        if (checksum[0] != bytes[end] ||
-            checksum[1] != bytes[end+1] ||
-            checksum[2] != bytes[end+2] ||
-            checksum[3] != bytes[end+3])
-                throw new Error("Wrong checksum");
-        var version = hash.shift();
-        return [version, hash];
+            var res = Bitcoin.base58check.decode(address);
+            var version = res.version;
+            var payload = Array.from(res.payload);
+        return [version, payload];
     }
 
     encode_length = function(len) {
@@ -30,7 +23,7 @@
         else
             return [0x80|2, len >> 8, len & 0xff];
     }
-    
+
     encode_id = function(id, s) {
         var len = encode_length(s.length);
         return [id].concat(len).concat(s);
@@ -107,7 +100,7 @@
                     encode_integer(1)
                 )
             ),
-            encode_constructed(1, 
+            encode_constructed(1,
                 encode_bitstring([0].concat(encoded_pub))
             )
         );
@@ -143,7 +136,7 @@
         $('#from_hash').button('toggle');
         update_gen();
         var bytes = Crypto.util.randomBytes(32);
-        $('#hash').val(Crypto.util.bytesToHex(bytes));
+        $('#hash').val(Bitcoin.convert.bytesToHex(bytes));
         generate();
     }
 
@@ -192,18 +185,13 @@
     function generate() {
         var hash_str = pad($('#hash').val(), 64, '0');
 
-        var hash = Crypto.util.hexToBytes(hash_str);
+        var hash = Bitcoin.convert.hexToBytes(hash_str);
 
         eckey = new Bitcoin.ECKey(hash);
-
-        gen_eckey = eckey;
+        gen_eckey=eckey;
 
         try {
-            var curve = getSECCurveByName("secp256k1");
-            gen_pt = curve.getG().multiply(eckey.priv);
-            gen_eckey.pub = getEncoded(gen_pt, gen_compressed);
-            gen_eckey.pubKeyHash = Bitcoin.Util.sha256ripe160(gen_eckey.pub);
-            var addr = eckey.getBitcoinAddress();
+            var addr=eckey.getAddress();
             setErrorState($('#hash'), false);
         } catch (err) {
             //console.info(err);
@@ -219,7 +207,7 @@
         setErrorState($('#sec'), false);
         gen_compressed = $(this).attr('id') == 'compressed';
         gen_eckey.pub = getEncoded(gen_pt, gen_compressed);
-        gen_eckey.pubKeyHash = Bitcoin.Util.sha256ripe160(gen_eckey.pub);
+        gen_eckey.pubKeyHash = Bitcoin.Util.sha256ripe160(gen_eckey.getPub().toBytes());
         gen_update();
     }
 
@@ -229,14 +217,14 @@
         var compressed = gen_compressed;
 
         var hash_str = pad($('#hash').val(), 64, '0');
-        var hash = Crypto.util.hexToBytes(hash_str);
+        var hash = Bitcoin.convert.hexToBytes(hash_str);
 
-        var hash160 = eckey.getPubKeyHash();
+        var hash160 = Bitcoin.Util.sha256ripe160(eckey.getPub().toBytes());
 
-        var addr = eckey.getBitcoinAddress();
+        var addr = eckey.getAddress();
         $('#addr').val(addr);
 
-        var h160 = Crypto.util.bytesToHex(hash160);
+        var h160 = Bitcoin.convert.bytesToHex(hash160);
         $('#h160').val(h160);
 
         var payload = hash;
@@ -247,11 +235,11 @@
         var sec = new Bitcoin.Address(payload); sec.version = 128;
         $('#sec').val(sec);
 
-        var pub = Crypto.util.bytesToHex(getEncoded(gen_pt, compressed));
+        var pub = Bitcoin.convert.bytesToHex(eckey.getPub().toBytes());
         $('#pub').val(pub);
 
-        var der = Crypto.util.bytesToHex(getDER(eckey, compressed));
-        $('#der').val(der);
+        //var der = Bitcoin.convert.bytesToHex(getDER(eckey, compressed));
+        //$('#der').val(der);
 
         var qrCode = qrcode(3, 'M');
         var text = $('#addr').val();
@@ -266,8 +254,8 @@
 
 
     function calc_hash() {
-        var hash = Crypto.SHA256($('#pass').val(), { asBytes: true });
-        $('#hash').val(Crypto.util.bytesToHex(hash));
+        var hash = Bitcoin.Crypto.SHA256($('#pass').val(), { asBytes: true });
+        $('#hash').val(Bitcoin.convert.bytesToHex(Bitcoin.convert.wordArrayToBytes(hash)));
     }
 
     function onChangePass() {
@@ -300,8 +288,8 @@
 
         var sec = $('#sec').val();
 
-        try { 
-            var res = parseBase58Check(sec); 
+        try {
+            var res = parseBase58Check(sec);
             var version = res[0];
             var payload = res[1];
         } catch (err) {
@@ -328,7 +316,7 @@
             $('#uncompressed').button('toggle');
         }
 
-        $('#hash').val(Crypto.util.bytesToHex(payload));
+        $('#hash').val(Bitcoin.convert.bytesToHex(payload));console.log(payload);
 
         timeout = setTimeout(generate, TIMEOUT);
     }
@@ -389,7 +377,7 @@
     function issubset(a, ssv) {
         var b = ssv.trim().split(' ');
         for (var i = 0; i < b.length; i++) {
-            if (a.indexOf(b[i].toLowerCase()) == -1 
+            if (a.indexOf(b[i].toLowerCase()) == -1
                 && a.indexOf(b[i].toUpperCase()) == -1)
             return false;
         }
@@ -398,13 +386,13 @@
 
     function autodetect(str) {
         var enc = [];
-        if (isHex(str)) 
+        if (isHex(str))
             enc.push('hex');
         if (isBase58(str))
             enc.push('base58');
-        if (issubset(mn_words, str)) 
+        if (issubset(mn_words, str))
             enc.push('mnemonic');
-        if (issubset(rfc1751_wordlist, str)) 
+        if (issubset(rfc1751_wordlist, str))
             enc.push('rfc1751');
         if (isBase64(str))
             enc.push('base64');
@@ -461,21 +449,21 @@
 
         if (bytes.length > 0) {
             if (from == 'base58') {
-                try { 
-                    var res = parseBase58Check(str); 
+                try {
+                    var res = parseBase58Check(str);
                     type = 'Check ver.' + res[0];
                     bytes = res[1];
                 } catch (err) {
                     bytes = Bitcoin.Base58.decode(str);
                 }
             } else if (from == 'hex') {
-                bytes = Crypto.util.hexToBytes(str.replace(/[ :,]+/g,''));
+                bytes = Bitcoin.convert.hexToBytes(str.replace(/[ :,]+/g,''));
             } else if (from == 'rfc1751') {
                 try { bytes = english_to_key(str); } catch (err) { type = ' ' + err; bytes = []; };
             } else if (from == 'mnemonic') {
-                bytes = Crypto.util.hexToBytes(mn_decode(str.trim()));
+                bytes = Bitcoin.convert.hexToBytes(mn_decode(str.trim()));
             } else if (from == 'base64') {
-                try { bytes = Crypto.util.base64ToBytes(str); } catch (err) {}
+                try { bytes = Bitcoin.convert.base64ToBytes(str); } catch (err) {}
             }
 
             var ver = '';
@@ -489,15 +477,15 @@
                     text = Bitcoin.Base58.encode(bytes);
                 }
             } else if (to == 'hex') {
-                text = Crypto.util.bytesToHex(bytes);
+                text = Bitcoin.convert.bytesToHex(bytes);
             } else if (to == 'text') {
                 text = bytesToString(bytes);
             } else if (to == 'rfc1751') {
                 text = key_to_english(bytes);
             } else if (to == 'mnemonic') {
-                text = mn_encode(Crypto.util.bytesToHex(bytes));
+                text = mn_encode(Bitcoin.convert.bytesToHex(bytes));
             } else if (to == 'base64') {
-                text = Crypto.util.bytesToBase64(bytes);
+                text = Bitcoin.convert.bytesToBase64(bytes);
             } else if (to == 'rot13') {
                 text = rot13(str);
             }
@@ -612,8 +600,8 @@
             if (keys != null) {
                 var cc = keys[1];
                 var pk = keys[0];
-                $('#seed').val(Crypto.util.bytesToHex(cc));
-                $('#expo').val(Crypto.util.bytesToHex(pk));
+                $('#seed').val(Bitcoin.convert.bytesToHex(cc));
+                $('#expo').val(Bitcoin.convert.bytesToHex(pk));
             }
         }
 
@@ -626,14 +614,14 @@
         var pk = Crypto.util.randomBytes(32);
 
         if (chain_type == 'chain_armory') {
-            $('#seed').val(Crypto.util.bytesToHex(cc));
-            $('#expo').val(Crypto.util.bytesToHex(pk));
+            $('#seed').val(Bitcoin.convert.bytesToHex(cc));
+            $('#expo').val(Bitcoin.convert.bytesToHex(pk));
             var codes = armory_encode_keys(pk, cc);
             $('#memo').val(codes);
         }
 
         if (chain_type == 'chain_electrum') {
-            var seed = Crypto.util.bytesToHex(pk.slice(0,16));
+            var seed = Bitcoin.convert.bytesToHex(pk.slice(0,16));
             //nb! electrum doesn't handle trailing zeros very well
             if (seed.charAt(0) == '0') seed = seed.substr(1);
             $('#seed').val(seed);
@@ -669,12 +657,12 @@
 
     function electrum_seed_update(r, seed) {
         $('#progress').text('key stretching: ' + r + '%');
-        $('#expo').val(Crypto.util.bytesToHex(seed));
+        $('#expo').val(Bitcoin.convert.bytesToHex(seed));
     }
 
     function electrum_seed_success(privKey) {
         $('#progress').text('');
-        $('#expo').val(Crypto.util.bytesToHex(privKey));
+        $('#expo').val(Bitcoin.convert.bytesToHex(privKey));
         var addChange = parseInt($('#elChange').val());
         Electrum.gen(chain_range, addr_callback, update_chain, addChange);
     }
@@ -736,7 +724,7 @@
         var addr = '';
 
         try {
-            var res = parseBase58Check(sec); 
+            var res = parseBase58Check(sec);
             var version = res[0];
             var payload = res[1];
             var compressed = false;
@@ -745,11 +733,7 @@
                 compressed = true;
             }
             var eckey = new Bitcoin.ECKey(payload);
-            var curve = getSECCurveByName("secp256k1");
-            var pt = curve.getG().multiply(eckey.priv);
-            eckey.pub = getEncoded(pt, compressed);
-            eckey.pubKeyHash = Bitcoin.Util.sha256ripe160(eckey.pub);
-            addr = eckey.getBitcoinAddress();
+            addr = eckey.getAddress();
         } catch (err) {
         }
 
@@ -780,7 +764,7 @@
         var address = $('#txAddr').val();
         TX.parseInputs(txUnspent, address);
         var value = TX.getBalance();
-        var fval = Bitcoin.Util.formatValue(value);
+        var fval = parseInt(value.toString())/100000000;
         var fee = parseFloat($('#txFee').val());
         $('#txBalance').val(fval);
         var val=fval - fee;
@@ -807,7 +791,7 @@
     function txGetUnspent() {
         var addr = $('#txAddr').val();
 
-        var url = (txType == 'txBCI') ? 'http://blockchain.info/unspent?address=' + addr :
+        var url = (txType == 'txBCI') ? 'http://blockchain.info/unspent?active=' + addr :
             'http://blockexplorer.com/q/mytransactions/' + addr;
 
         url = prompt('Press OK to download transaction history:', url);
@@ -822,8 +806,11 @@
     function txOnChangeJSON() {
         var str = $('#txJSON').val();
         var sendTx = TX.fromBBE(str);
+for (var i = 0; i < sendTx.ins.length; i++) {
+            sendTx.ins[i].outpoint.hash = Bitcoin.convert.base64ToBytes(sendTx.ins[i].outpoint.hash);
+}
         var bytes = sendTx.serialize();
-        var hex = Crypto.util.bytesToHex(bytes);
+        var hex = Bitcoin.convert.bytesToHex(bytes);
         $('#txHex').val(hex);
     }
 
@@ -831,7 +818,7 @@
         var str = $('#txHex').val();
         str = str.replace(/[^0-9a-fA-f]/g,'');
         $('#txHex').val(str);
-        var bytes = Crypto.util.hexToBytes(str);
+        var bytes = Bitcoin.convert.hexToBytes(str);
         var sendTx = TX.deserialize(bytes);
         var text = TX.toBBE(sendTx);
         $('#txJSON').val(text);
@@ -893,7 +880,7 @@
         var fee = parseFloat('0'+$('#txFee').val());
 
         try {
-            var res = parseBase58Check(sec); 
+            var res = parseBase58Check(sec);
             var version = res[0];
             var payload = res[1];
         } catch (err) {
@@ -909,8 +896,6 @@
         }
 
         var eckey = new Bitcoin.ECKey(payload);
-
-        eckey.setCompressed(compressed);
 
         TX.init(eckey);
 
@@ -933,7 +918,7 @@
             var sendTx = TX.construct();
             var txJSON = TX.toBBE(sendTx);
             var buf = sendTx.serialize();
-            var txHex = Crypto.util.bytesToHex(buf);
+            var txHex = Bitcoin.convert.bytesToHex(buf);
             $('#txJSON').val(txJSON);
             $('#txHex').val(txHex);
         } catch(err) {
@@ -979,7 +964,6 @@
 
         var val = balance - fval - fee;
         val=val.toFixed(8);
-        console.log(val);
         $('[id=txValue]:last').val(val);
 
         clearTimeout(timeout);
@@ -1004,7 +988,7 @@
         var eckey = null;
         var compressed = false;
         try {
-            var res = parseBase58Check(sec); 
+            var res = parseBase58Check(sec);
             var version = res[0];
             var payload = res[1];
             if (payload.length > 32) {

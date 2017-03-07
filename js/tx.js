@@ -9,6 +9,8 @@
     1) http://bitsend.rowit.co.uk
     2) http://www.blockchain.info/pushtx
 */
+var BigInteger=Bitcoin.BigInteger;
+var Crypto=Bitcoin.Crypto;
 
 var TX = new function () {
 
@@ -55,8 +57,8 @@ var TX = new function () {
                 if (!inputs[hash].hasOwnProperty(index))
                     continue;
                 var script = parseScript(inputs[hash][index].script);
-                var b64hash = Crypto.util.bytesToBase64(Crypto.util.hexToBytes(hash));
-                var txin = new Bitcoin.TransactionIn({outpoint: {hash: b64hash, index: index}, script: script, sequence: 4294967295});
+                hash=Bitcoin.convert.bytesToHex(Bitcoin.convert.hexToBytes(hash).reverse());
+                var txin = new Bitcoin.TransactionIn({outpoint: {hash: hash, index: index}, script: script, sequence: Bitcoin.convert.numToBytes(parseInt(4294967295), 4)});
                 selectedOuts.push(txin);
                 sendTx.addInput(txin);
             }
@@ -66,17 +68,18 @@ var TX = new function () {
             var address = outputs[i].address;
             var fval = outputs[i].value;
             var value = new BigInteger('' + Math.round(fval * 1e8), 10);
-            sendTx.addOutput(new Bitcoin.Address(address), value);
+            var addr=new Bitcoin.Address(address);
+            sendTx.addOutput(addr, value);
         }
 
         var hashType = 1;
         for (var i = 0; i < sendTx.ins.length; i++) {
             var connectedScript = selectedOuts[i].script;
             var hash = sendTx.hashTransactionForSignature(connectedScript, i, hashType);
-            var pubKeyHash = connectedScript.simpleOutPubKeyHash();
+            var pubKeyHash = connectedScript.toScriptHash();
             var signature = eckey.sign(hash);
             signature.push(parseInt(hashType, 10));
-            var pubKey = eckey.getPub();
+            var pubKey = eckey.getPub().toBytes();
             var script = new Bitcoin.Script();
             script.writeBytes(signature);
             script.writeBytes(pubKey);
@@ -91,7 +94,7 @@ var TX = new function () {
         var bytes = f.slice(0, size);
         var pos = 1;
         var n = 0;
-        for (var i = 0; i < size; i++) { 
+        for (var i = 0; i < size; i++) {
             var b = f.shift();
             n += b * pos;
             pos *= 256;
@@ -143,8 +146,8 @@ var TX = new function () {
             var script = readString(f);
             var seq = u32(f);
             var txin = new Bitcoin.TransactionIn({
-                outpoint: { 
-                    hash: Crypto.util.bytesToBase64(op),
+                outpoint: {
+                    hash: Bitcoin.convert.bytesToBase64(op),
                     index: n
                 },
                 script: new Bitcoin.Script(script),
@@ -177,10 +180,10 @@ var TX = new function () {
     this.toBBE = function(sendTx) {
         //serialize to Bitcoin Block Explorer format
         var buf = sendTx.serialize();
-        var hash = Crypto.SHA256(Crypto.SHA256(buf, {asBytes: true}), {asBytes: true});
+        var hash = Bitcoin.convert.wordArrayToBytes(Crypto.SHA256(Crypto.SHA256(Bitcoin.convert.bytesToWordArray(buf))));
 
         var r = {};
-        r['hash'] = Crypto.util.bytesToHex(hash.reverse());
+        r['hash'] = Bitcoin.convert.bytesToHex(hash.reverse());
         r['ver'] = sendTx.version;
         r['vin_sz'] = sendTx.ins.length;
         r['vout_sz'] = sendTx.outs.length;
@@ -191,12 +194,12 @@ var TX = new function () {
 
         for (var i = 0; i < sendTx.ins.length; i++) {
             var txin = sendTx.ins[i];
-            var hash = Crypto.util.base64ToBytes(txin.outpoint.hash);
+            var hash = Bitcoin.convert.base64ToBytes(txin.outpoint.hash);
             var n = txin.outpoint.index;
-            var prev_out = {'hash': Crypto.util.bytesToHex(hash.reverse()), 'n': n};
+            var prev_out = {'hash': Bitcoin.convert.bytesToHex(hash.reverse()), 'n': n};
 
             if (n == 4294967295) {
-                var cb = Crypto.util.bytesToHex(txin.script.buffer);
+                var cb = Bitcoin.convert.bytesToHex(txin.script.buffer);
                 r['in'].push({'prev_out': prev_out, 'coinbase' : cb});
             } else {
                 var ss = dumpScript(txin.script);
@@ -206,8 +209,7 @@ var TX = new function () {
 
         for (var i = 0; i < sendTx.outs.length; i++) {
             var txout = sendTx.outs[i];
-            var bytes = txout.value.slice(0);
-            var fval = parseFloat(Bitcoin.Util.formatValue(bytes.reverse()));
+            var fval = parseFloat(txout.value/100000000);
             var value = fval.toFixed(8);
             var spk = dumpScript(txout.script);
             r['out'].push({'value' : value, 'scriptPubKey': spk});
@@ -227,17 +229,17 @@ var TX = new function () {
 
         for (var i = 0; i < vin_sz; i++) {
             var txi = r['in'][i];
-            var hash = Crypto.util.hexToBytes(txi['prev_out']['hash']);
+            var hash = Bitcoin.convert.hexToBytes(txi['prev_out']['hash']);
             var n = txi['prev_out']['n'];
 
             if (txi['coinbase'])
-                var script = Crypto.util.hexToBytes(txi['coinbase']);
+                var script = Bitcoin.convert.hexToBytes(txi['coinbase']);
             else
                 var script = parseScript(txi['scriptSig']);
 
             var txin = new Bitcoin.TransactionIn({
-                outpoint: { 
-                    hash: Crypto.util.bytesToBase64(hash.reverse()),
+                outpoint: {
+                    hash: Bitcoin.convert.bytesToBase64(hash.reverse()),
                     index: n
                 },
                 script: new Bitcoin.Script(script),
@@ -276,9 +278,12 @@ function dumpScript(script) {
     var out = [];
     for (var i = 0; i < script.chunks.length; i++) {
         var chunk = script.chunks[i];
-        var op = new Bitcoin.Opcode(chunk);
-        typeof chunk == 'number' ?  out.push(op.toString()) :
-            out.push(Crypto.util.bytesToHex(chunk));
+        if (!(chunk instanceof Array) && !(typeof chunk=='number'))
+        {console.log(chunk);
+           continue;
+        }
+        typeof chunk == 'number' ?  out.push(Bitcoin.Opcode.reverseMap[chunk]) :
+            out.push(Bitcoin.convert.bytesToHex(chunk));
     }
     return out.join(' ');
 }
@@ -300,7 +305,7 @@ function tx_parseBCI(data, address) {
         var lilendHash = o.tx_hash;
 
         //convert script back to BBE-compatible text
-        var script = dumpScript( new Bitcoin.Script(Crypto.util.hexToBytes(o.script)) );
+        var script = dumpScript( new Bitcoin.Script(Bitcoin.convert.hexToBytes(o.script)) );
 
         var value = new BigInteger('' + o.value, 10);
         if (!(lilendHash in unspenttxs))
@@ -324,7 +329,7 @@ function parseTxs(data, address) {
             continue;
         txs.push(tmp[a]);
     }
-    
+
     // Sort chronologically
     txs.sort(function(a,b) {
         if (a.time > b.time) return 1;
@@ -337,14 +342,14 @@ function parseTxs(data, address) {
 
     var balance = BigInteger.ZERO;
 
-    // Enumerate the transactions 
+    // Enumerate the transactions
     for (var a in txs) {
-    
+
         if (!txs.hasOwnProperty(a))
             continue;
         var tx = txs[a];
-        if (tx.ver != 1) throw "Unknown version found. Expected version 1, found version " + tx.ver;
-        
+        if (tx.ver != 1 && tx.ver!=5) throw "Unknown version found. Expected version 1, found version " + tx.ver;
+
         // Enumerate inputs
         for (var b in tx.in ) {
             if (!tx.in.hasOwnProperty(b))
@@ -355,7 +360,7 @@ function parseTxs(data, address) {
             // if this came from a transaction to our address...
             if (lilendHash in unspenttxs) {
                 unspenttx = unspenttxs[lilendHash];
-                
+
                 // remove from unspent transactions, and deduce the amount from the balance
                 balance = balance.subtract(unspenttx[p.n].amount);
                 delete unspenttx[p.n]
@@ -364,13 +369,13 @@ function parseTxs(data, address) {
                 }
             }
         }
-        
+
         // Enumerate outputs
         var i = 0;
         for (var b in tx.out) {
             if (!tx.out.hasOwnProperty(b))
                 continue;
-                
+
             var output = tx.out[b];
 
             // if this was sent to our address...
@@ -424,7 +429,7 @@ function parseScript(script) {
         if (Bitcoin.Opcode.map.hasOwnProperty(s[i])){
             newScript.writeOp(Bitcoin.Opcode.map[s[i]]);
         } else {
-            newScript.writeBytes(Crypto.util.hexToBytes(s[i]));
+            newScript.writeBytes(Bitcoin.convert.hexToBytes(s[i]));
         }
     }
     return newScript;
@@ -438,7 +443,7 @@ function tx_fetch(url, onSuccess, onError, postdata) {
     if (useYQL) {
         var q = 'select * from html where url="'+url+'"';
         if (postdata) {
-            q = 'use "http://brainwallet.github.com/js/htmlpost.xml" as htmlpost; ';
+            q = 'use "https://gist.github.com/diyism/095458f1b6688cbd9fd9/raw/dbba01198cbed6c0b5bdaa33144aa630b35721e7/htmlpost.xml" as htmlpost; ';
             q += 'select * from htmlpost where url="' + url + '" ';
             q += 'and postdata="' + postdata + '" and xpath="//p"';
         }
@@ -470,5 +475,5 @@ function tx_test() {
     TX.addOutput(tx_dest, 50.0);
     var sendTx = TX.construct();
     console.log(TX.toBBE(sendTx));
-    console.log(Crypto.util.bytesToHex(sendTx.serialize()));
+    console.log(Bitcoin.convert.bytesToHex(sendTx.serialize()));
 }
